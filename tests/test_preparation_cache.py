@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -11,6 +12,7 @@ from chromadb.errors import NotFoundError
 from src import index_documents, preprocess_pdfs
 from src.rag import embedding_model_digest
 from src.startup import Startup
+from src.sections import SECTIONS, Section, section_config
 
 
 class PreparationCacheTests(unittest.TestCase):
@@ -21,6 +23,13 @@ class PreparationCacheTests(unittest.TestCase):
         self.input = root / "pdf"
         self.output = root / "processed"
         self.input.mkdir()
+        configs = patch.dict(SECTIONS, {
+            Section.THEORY: replace(
+                section_config(Section.THEORY), input_dir=self.input, output_dir=self.output
+            ),
+        })
+        configs.start()
+        self.addCleanup(configs.stop)
         self.pdf_path = self.input / "lecture.pdf"
         with fitz.open() as pdf:
             page = pdf.new_page()

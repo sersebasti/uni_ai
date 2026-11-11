@@ -6,7 +6,9 @@ from collections.abc import Sequence
 import chromadb
 import httpx
 
-COLLECTION_NAME = "university_notes"
+from src.sections import Section, section_config
+
+COLLECTION_NAME = section_config(Section.THEORY).collection_name
 
 
 def chroma_client() -> chromadb.ClientAPI:

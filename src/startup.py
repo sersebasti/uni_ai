@@ -13,6 +13,7 @@ import httpx
 
 from src import index_documents, preprocess_pdfs
 from src.rag import chroma_client, embedding_model
+from src.sections import Section, section_config
 
 logger = logging.getLogger(__name__)
 STAGES = (
@@ -33,6 +34,9 @@ class StageState(TypedDict):
 
 
 class StartupState(TypedDict):
+    section: str
+    label: str
+    documents_dir: str
     status: str
     ready: bool
     error: str | None
@@ -40,10 +44,14 @@ class StartupState(TypedDict):
 
 
 class Startup:
-    def __init__(self) -> None:
+    def __init__(self, section: Section = Section.THEORY) -> None:
+        self.config = section_config(section)
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._state: StartupState = {
+            "section": section.value,
+            "label": self.config.label,
+            "documents_dir": self.config.documents_dir.as_posix(),
             "status": "preparing",
             "ready": False,
             "error": None,
@@ -137,8 +145,13 @@ class Startup:
                 raise RuntimeError("Download del modello interrotto prima del completamento.")
 
     def run(self) -> None:
-        current_stage = "services"
+        current_stage = "preprocess"
         try:
+            if not preprocess_pdfs.find_pdf_paths(self.config.input_dir):
+                logger.info("Sezione %s senza documenti", self.config.label)
+                with self._lock:
+                    self._state.update(status="empty", ready=False)
+                return
             for stage_id, _ in STAGES:
                 current_stage = stage_id
                 self.update(stage_id, detail="Avvio attivita")
@@ -148,16 +161,30 @@ class Startup:
                 elif stage_id == "model":
                     self.prepare_model()
                 elif stage_id == "preprocess":
-                    page_count = preprocess_pdfs.cached_page_count()
+                    page_count = preprocess_pdfs.cached_page_count(
+                        self.config.input_dir, self.config.output_dir
+                    )
                     if page_count is None:
-                        preprocess_pdfs.main([], progress=self.progress(stage_id))
+                        preprocess_pdfs.main(
+                            [
+                                "--input-dir", str(self.config.input_dir),
+                                "--output-dir", str(self.config.output_dir),
+                            ],
+                            progress=self.progress(stage_id),
+                        )
                     else:
                         completion_detail = f"Riutilizzate {page_count} pagine gia elaborate"
                         self.update(stage_id, page_count, page_count, completion_detail)
                 else:
-                    chunk_count = index_documents.cached_chunk_count()
+                    chunk_count = index_documents.cached_chunk_count(
+                        self.config.manifest_path, self.config.collection_name
+                    )
                     if chunk_count is None:
-                        index_documents.main(progress=self.progress(stage_id))
+                        index_documents.main(
+                            progress=self.progress(stage_id),
+                            manifest_path=self.config.manifest_path,
+                            collection_name=self.config.collection_name,
+                        )
                     else:
                         completion_detail = f"Indice esistente riutilizzato: {chunk_count} blocchi"
                         self.update(stage_id, chunk_count, chunk_count, completion_detail)

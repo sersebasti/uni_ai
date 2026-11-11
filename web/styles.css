@@ -33,6 +33,16 @@ header { margin-bottom: 28px; }
 h1 { margin: 0; font-size: 2.8rem; }
 .subtitle { margin: 8px 0 0; font-size: 1.15rem; }
 
+.section-switch { display: flex; gap: 8px; flex-wrap: wrap; }
+.section-switch button { background: #fffdf8; color: #245c46; border: 1px solid #83988a; }
+.section-switch button[aria-pressed="true"] { background: #245c46; color: #fff; }
+.section-description { font-family: ui-sans-serif, sans-serif; line-height: 1.5; }
+.practice-settings { display: grid; gap: 12px; margin: 0; padding: 14px; border: 1px solid #83988a; border-radius: 6px; }
+.practice-settings label { display: grid; gap: 6px; font-family: ui-sans-serif, sans-serif; font-size: 0.9rem; }
+.practice-settings input, .practice-settings select { min-width: 0; width: 100%; padding: 8px; font: inherit; }
+.practice-settings p { margin: 0; font-size: 0.85rem; line-height: 1.5; }
+.practice-settings[hidden], .conversation[hidden] { display: none; }
+
 .startup-status {
   margin-bottom: 24px;
   padding: 18px;

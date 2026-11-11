@@ -19,7 +19,8 @@ from fastapi.staticfiles import StaticFiles
 from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI, OpenAIError
 from pydantic import BaseModel, Field
 
-from src.rag import COLLECTION_NAME, chroma_client, create_embeddings
+from src.rag import chroma_client, create_embeddings
+from src.sections import Section, section_config
 from src.startup import Startup, StartupState
 
 WEB_DIR = Path("web")
@@ -33,14 +34,17 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    startup = Startup()
-    app.state.startup = startup
-    worker = threading.Thread(target=startup.run, name="startup", daemon=True)
-    worker.start()
+    startups = {section: Startup(section) for section in Section}
+    app.state.startups = startups
+    app.state.startup = startups[Section.THEORY]
+    for section, startup in startups.items():
+        worker = threading.Thread(target=startup.run, name=f"startup-{section.value}", daemon=True)
+        worker.start()
     try:
         yield
     finally:
-        startup.stop()
+        for startup in startups.values():
+            startup.stop()
 
 
 app = FastAPI(title="Uni AI", lifespan=lifespan)
@@ -51,6 +55,9 @@ app.mount("/media", StaticFiles(directory=MEDIA_DIR), name="media")
 
 class ChatRequest(BaseModel):
     question: str = Field(min_length=3, max_length=2_000)
+    section: Section = Section.THEORY
+    cad_version: str = Field(default="", max_length=80)
+    cad_language: str = Field(default="Italiano", min_length=1, max_length=80)
 
 
 class Source(BaseModel):
@@ -63,6 +70,7 @@ class Source(BaseModel):
 class IllustrationRequest(BaseModel):
     question: str = Field(min_length=3, max_length=2_000)
     answer: str = Field(min_length=3, max_length=12_000)
+    section: Section = Section.THEORY
 
 
 def is_course_overview(question: str) -> bool:
@@ -77,10 +85,12 @@ def is_course_overview(question: str) -> bool:
     )
 
 
-def find_sources(question: str) -> list[dict[str, object]]:
+def find_sources(
+    question: str, section: Section = Section.THEORY,
+) -> list[dict[str, object]]:
     try:
-        collection = chroma_client().get_collection(COLLECTION_NAME)
-        if is_course_overview(question):
+        collection = chroma_client().get_collection(section_config(section).collection_name)
+        if section == Section.THEORY and is_course_overview(question):
             overview = collection.get(
                 where={"page": 1},
                 include=["documents", "metadatas"],
@@ -150,7 +160,12 @@ async def parse_chat_request(request: Request) -> tuple[ChatRequest, bytes | Non
 
     form = await request.form()
     try:
-        chat_request = ChatRequest(question=str(form.get("question", "")))
+        chat_request = ChatRequest.model_validate({
+            "question": str(form.get("question", "")),
+            "section": str(form.get("section", Section.THEORY.value)),
+            "cad_version": str(form.get("cad_version", "")),
+            "cad_language": str(form.get("cad_language", "Italiano")),
+        })
     except ValueError as error:
         raise HTTPException(status_code=422, detail="Domanda non valida.") from error
 
@@ -192,13 +207,20 @@ def home() -> FileResponse:
 
 
 @app.get("/api/status")
-def status() -> StartupState:
-    return app.state.startup.snapshot()
+def status(section: Section = Section.THEORY) -> StartupState:
+    startup = app.state.startup if section == Section.THEORY else app.state.startups[section]
+    return startup.snapshot()
 
 
-def require_ready() -> None:
-    state = app.state.startup.snapshot()
+def require_ready(section: Section = Section.THEORY) -> None:
+    state = status(section)
     if not state["ready"]:
+        if state["status"] == "empty":
+            raise HTTPException(
+                status_code=503,
+                detail=f"Nessun PDF nella sezione {state['label']}. "
+                f"Inserisci i documenti in {state['documents_dir']} e riavvia web.",
+            )
         raise HTTPException(
             status_code=503,
             detail=state["error"] or "Preparazione in corso. Controlla lo stato di avanzamento.",
@@ -206,25 +228,54 @@ def require_ready() -> None:
 
 
 @app.get("/api/documents/{filename}")
-def document(filename: str) -> FileResponse:
+def document(filename: str, section: Section = Section.THEORY) -> FileResponse:
     if Path(filename).name != filename or not filename.endswith(".pdf"):
         raise HTTPException(status_code=404, detail="Dispensa non trovata.")
 
-    pdf_path = DOCUMENTS_DIR / filename
-    if not pdf_path.is_file():
+    directories = (
+        [DOCUMENTS_DIR, DOCUMENTS_DIR / "teoria"]
+        if section == Section.THEORY else [DOCUMENTS_DIR / "pratica"]
+    )
+    paths = [directory / filename for directory in directories if (directory / filename).is_file()]
+    if not paths:
         raise HTTPException(status_code=404, detail="Dispensa non trovata.")
-    return FileResponse(pdf_path, media_type="application/pdf")
+    if len(paths) > 1:
+        raise HTTPException(status_code=409, detail="Nome PDF duplicato nella sezione. Rinomina i duplicati.")
+    return FileResponse(paths[0], media_type="application/pdf")
 
 
 @app.post("/api/chat")
 async def chat(request: Request) -> dict[str, object]:
-    require_ready()
     chat_request, image_bytes, image_type = await parse_chat_request(request)
-    sources = find_sources(chat_request.question)
+    require_ready(chat_request.section)
+    sources = find_sources(chat_request.question, chat_request.section)
 
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         raise HTTPException(status_code=503, detail="OPENAI_API_KEY non configurata.")
+
+    system_prompt = (
+        "Sei un assistente per lo studio universitario. Rispondi in italiano "
+        "usando esclusivamente le fonti fornite. Se non bastano, dillo chiaramente. "
+        "Non inventare informazioni o citazioni. Se l'utente allega un'immagine, "
+        "usala come supporto alla domanda ma segnala eventuali dettagli che non puoi "
+        "verificare nelle fonti."
+    )
+    question = chat_request.question
+    if chat_request.section == Section.PRACTICE:
+        system_prompt += (
+            " Sei un tutor pratico di Solid Edge. Per le domande operative organizza la risposta "
+            "in: ambiente e prerequisiti, comandi, procedura numerata, controlli del risultato. "
+            "Usa solo procedure e nomi dei comandi supportati dai manuali forniti. "
+            "Non inventare percorsi dei menu. Distingui la versione e la lingua richieste "
+            "da quelle documentate; se la compatibilita non e verificabile, segnalalo "
+            "e chiedi i dettagli mancanti. Non controlli direttamente il programma CAD."
+        )
+        question = (
+            f"Versione Solid Edge richiesta: {chat_request.cad_version or 'non specificata'}\n"
+            f"Lingua interfaccia CAD richiesta: {chat_request.cad_language}\n"
+            f"Domanda: {question}"
+        )
 
     try:
         completion = OpenAI(api_key=api_key).chat.completions.create(
@@ -232,18 +283,12 @@ async def chat(request: Request) -> dict[str, object]:
             messages=[
                 {
                     "role": "system",
-                    "content": (
-                        "Sei un assistente per lo studio universitario. Rispondi in italiano "
-                        "usando esclusivamente le fonti fornite. Se non bastano, dillo chiaramente. "
-                        "Non inventare informazioni o citazioni. Se l'utente allega un'immagine, "
-                        "usala come supporto alla domanda ma segnala eventuali dettagli che non puoi "
-                        "verificare nelle fonti."
-                    ),
+                    "content": system_prompt,
                 },
                 {
                     "role": "user",
                     "content": build_user_content(
-                        chat_request.question,
+                        question,
                         sources,
                         image_bytes,
                         image_type,
@@ -265,7 +310,10 @@ async def chat(request: Request) -> dict[str, object]:
                 lecture=str(source["lecture"]),
                 page=int(source["page"]),
                 source_pdf=str(source["source_pdf"]),
-                document_url=f"/api/documents/{quote(Path(str(source['source_pdf'])).name)}",
+                document_url=(
+                    f"/api/documents/{quote(Path(str(source['source_pdf'])).name)}"
+                    f"?section={chat_request.section.value}#page={int(source['page'])}"
+                ),
             ).model_dump()
             for source in unique_sources.values()
         ],
@@ -274,7 +322,7 @@ async def chat(request: Request) -> dict[str, object]:
 
 @app.post("/api/illustrations")
 def generate_illustration(request: IllustrationRequest) -> dict[str, str]:
-    require_ready()
+    require_ready(request.section)
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         raise HTTPException(status_code=503, detail="OPENAI_API_KEY non configurata.")

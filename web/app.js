@@ -1,6 +1,14 @@
 const form = document.querySelector("#chat-form");
 const questionInput = document.querySelector("#question");
-const conversation = document.querySelector("#conversation");
+const conversations = {
+  theory: document.querySelector("#conversation-theory"),
+  practice: document.querySelector("#conversation-practice"),
+};
+const sectionButtons = document.querySelectorAll("[data-section]");
+const sectionDescription = document.querySelector("#section-description");
+const practiceSettings = document.querySelector("#practice-settings");
+const cadVersion = document.querySelector("#cad-version");
+const cadLanguage = document.querySelector("#cad-language");
 const submitButton = document.querySelector("#submit");
 const imageInput = document.querySelector("#image");
 const attachmentName = document.querySelector("#attachment-name");
@@ -12,6 +20,11 @@ const startupStages = document.querySelector("#startup-stages");
 const startupError = document.querySelector("#startup-error");
 let systemReady = false;
 let chatBusy = false;
+let selectedSection = "theory";
+let statusTimer;
+let statusGeneration = 0;
+const drafts = { theory: "", practice: "" };
+const attachments = { theory: null, practice: null };
 
 function updateSubmitButton() {
   submitButton.disabled = !systemReady || chatBusy;
@@ -25,16 +38,19 @@ function renderStartup(state) {
   startupPanel.setAttribute("aria-busy", String(state.status === "preparing"));
   startupHeading.textContent = state.ready
     ? "Sistema pronto"
-    : state.status === "error" ? "Preparazione non riuscita" : "Preparazione del sistema";
+    : state.status === "empty" ? "In attesa dei documenti"
+      : state.status === "error" ? "Preparazione non riuscita" : "Preparazione del sistema";
   startupSummary.textContent = state.ready
-    ? "Puoi iniziare a fare domande sulle dispense."
-    : state.status === "error"
+    ? `Puoi iniziare a fare domande nella sezione ${state.label}.`
+    : state.status === "empty"
+      ? `Inserisci i PDF in ${state.documents_dir}/ e riavvia il servizio web. L'altra sezione resta indipendente.`
+      : state.status === "error"
       ? "Correggi il problema indicato e riavvia il servizio web."
       : "Le attivita vengono eseguite in background. Puoi lasciare aperta questa pagina.";
   startupError.hidden = !state.error;
   startupError.textContent = state.error || "";
   const labels = { pending: "In attesa", running: "In corso", done: "Completato", error: "Errore" };
-  const stages = state.stages.map((stage) => {
+  const stages = (state.status === "empty" ? [] : state.stages).map((stage) => {
     const item = document.createElement("li");
     item.className = "startup-stage";
     item.dataset.status = stage.status;
@@ -65,11 +81,15 @@ function renderStartup(state) {
 }
 
 async function pollStartup() {
+  const section = selectedSection;
+  const generation = statusGeneration;
   try {
-    const response = await fetch("/api/status", { cache: "no-store" });
+    const response = await fetch(`/api/status?section=${section}`, { cache: "no-store" });
     if (!response.ok) throw new Error(`Stato non disponibile (HTTP ${response.status}).`);
-    renderStartup(await response.json());
+    const state = await response.json();
+    if (generation === statusGeneration) renderStartup(state);
   } catch (error) {
+    if (generation !== statusGeneration) return;
     systemReady = false;
     updateSubmitButton();
     startupPanel.setAttribute("aria-busy", "true");
@@ -78,13 +98,48 @@ async function pollStartup() {
     startupError.hidden = false;
     startupError.textContent = error.message;
   } finally {
-    window.setTimeout(pollStartup, systemReady ? 10000 : 1000);
+    if (generation === statusGeneration) {
+      statusTimer = window.setTimeout(pollStartup, systemReady ? 10000 : 1000);
+    }
   }
+}
+
+for (const button of sectionButtons) {
+  button.addEventListener("click", () => {
+    const section = button.dataset.section;
+    if (section === selectedSection) return;
+    drafts[selectedSection] = questionInput.value;
+    selectedSection = section;
+    statusGeneration += 1;
+    questionInput.value = drafts[section];
+    for (const [name, view] of Object.entries(conversations)) view.hidden = name !== section;
+    for (const tab of sectionButtons) {
+      tab.setAttribute("aria-pressed", String(tab.dataset.section === section));
+    }
+    practiceSettings.hidden = section !== "practice";
+    sectionDescription.textContent = section === "practice"
+      ? "Procedure guidate dai tuoi manuali di Solid Edge, separate dalle dispense teoriche."
+      : "Concetti e spiegazioni dalle dispense teoriche.";
+    questionInput.placeholder = section === "practice"
+      ? "Ad esempio: Come creo un foro filettato in Solid Edge?"
+      : "Ad esempio: Spiegami il concetto di ...";
+    renderAttachment();
+    systemReady = false;
+    updateSubmitButton();
+    startupHeading.textContent = "Verifica della sezione";
+    startupSummary.textContent = "Connessione al server in corso...";
+    startupStages.replaceChildren();
+    startupError.hidden = true;
+    startupPanel.setAttribute("aria-busy", "true");
+    startupPanel.dataset.status = "preparing";
+    window.clearTimeout(statusTimer);
+    pollStartup();
+  });
 }
 
 pollStartup();
 
-function addMessage(content, role, sources = [], question = "") {
+function addMessage(content, role, sources = [], question = "", section = selectedSection) {
   const message = document.createElement("article");
   message.className = `message ${role}`;
   message.textContent = content;
@@ -126,7 +181,7 @@ function addMessage(content, role, sources = [], question = "") {
         const response = await fetch("/api/illustrations", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ question, answer: content }),
+          body: JSON.stringify({ question, answer: content, section }),
         });
         if (!response.headers.get("content-type")?.includes("application/json")) {
           throw new Error(`Generazione non disponibile (HTTP ${response.status}). Riprova piu tardi.`);
@@ -157,18 +212,25 @@ function addMessage(content, role, sources = [], question = "") {
     message.append(actions);
   }
 
-  conversation.append(message);
-  message.scrollIntoView({ behavior: "smooth", block: "end" });
+  conversations[section].append(message);
+  if (section === selectedSection) message.scrollIntoView({ behavior: "smooth", block: "end" });
+}
+
+function renderAttachment() {
+  imageInput.value = "";
+  const file = attachments[selectedSection];
+  attachmentName.textContent = file ? file.name : "";
+  clearImageButton.hidden = !file;
 }
 
 function clearAttachment() {
-  imageInput.value = "";
-  attachmentName.textContent = "";
-  clearImageButton.hidden = true;
+  attachments[selectedSection] = null;
+  renderAttachment();
 }
 
 imageInput.addEventListener("change", () => {
   const [file] = imageInput.files;
+  attachments[selectedSection] = file || null;
   attachmentName.textContent = file ? file.name : "";
   clearImageButton.hidden = !file;
 });
@@ -179,13 +241,21 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const question = questionInput.value.trim();
   if (!question || !systemReady || chatBusy) return;
+  const section = selectedSection;
+  const attachment = attachments[section];
 
   const formData = new FormData();
   formData.append("question", question);
-  if (imageInput.files[0]) formData.append("image", imageInput.files[0]);
+  formData.append("section", section);
+  if (section === "practice") {
+    formData.append("cad_version", cadVersion.value.trim());
+    formData.append("cad_language", cadLanguage.value);
+  }
+  if (attachment) formData.append("image", attachment);
 
-  addMessage(`${question}${imageInput.files[0] ? "\n[Immagine allegata]" : ""}`, "user");
+  addMessage(`${question}${attachment ? "\n[Immagine allegata]" : ""}`, "user", [], "", section);
   questionInput.value = "";
+  drafts[section] = "";
   clearAttachment();
   chatBusy = true;
   updateSubmitButton();
@@ -197,12 +267,12 @@ form.addEventListener("submit", async (event) => {
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.detail || "Errore durante la richiesta.");
-    addMessage(data.answer, "assistant", data.sources, question);
+    addMessage(data.answer, "assistant", data.sources, question, section);
   } catch (error) {
-    addMessage(error.message, "error");
+    addMessage(error.message, "error", [], "", section);
   } finally {
     chatBusy = false;
     updateSubmitButton();
-    questionInput.focus();
+    if (section === selectedSection) questionInput.focus();
   }
 });

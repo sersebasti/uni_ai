@@ -3,6 +3,7 @@ import os
 import tempfile
 import threading
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -12,10 +13,27 @@ from fastapi.testclient import TestClient
 from src import index_documents, preprocess_pdfs
 from src.startup import STAGES, Startup
 from src.web_app import app
+from src.sections import SECTIONS, Section, section_config
 
 
 class StartupTests(unittest.TestCase):
     def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        input_dir = root / "pdf"
+        input_dir.mkdir()
+        (input_dir / "fixture.pdf").touch()
+        configs = patch.dict(SECTIONS, {
+            section: replace(
+                section_config(section),
+                input_dir=input_dir if section == Section.THEORY else input_dir / "pratica",
+                output_dir=root / section.value,
+            )
+            for section in Section
+        })
+        configs.start()
+        self.addCleanup(configs.stop)
         for target in (
             "src.startup.preprocess_pdfs.cached_page_count",
             "src.startup.index_documents.cached_chunk_count",

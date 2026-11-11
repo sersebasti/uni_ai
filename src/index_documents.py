@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import logging
@@ -9,6 +10,7 @@ from pathlib import Path
 from chromadb.errors import NotFoundError
 
 from src.preprocess_pdfs import file_digest
+from src.sections import Section, section_config
 from src.rag import (
     COLLECTION_NAME,
     chroma_client,
@@ -25,12 +27,13 @@ INDEX_VERSION = 1
 logger = logging.getLogger(__name__)
 
 
-def index_fingerprint() -> str:
-    if not MANIFEST_PATH.is_file():
+def index_fingerprint(manifest_path: Path | None = None) -> str:
+    manifest_path = MANIFEST_PATH if manifest_path is None else manifest_path
+    if not manifest_path.is_file():
         raise SystemExit("Manifest not found. Run the preprocess service first.")
     settings = {
         "version": INDEX_VERSION,
-        "manifest": file_digest(MANIFEST_PATH),
+        "manifest": file_digest(manifest_path),
         "chunk_size": CHUNK_SIZE,
         "chunk_overlap": CHUNK_OVERLAP,
         "embedding_model": embedding_model(),
@@ -39,9 +42,11 @@ def index_fingerprint() -> str:
     return hashlib.sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest()
 
 
-def cached_chunk_count() -> int | None:
+def cached_chunk_count(
+    manifest_path: Path | None = None, collection_name: str = COLLECTION_NAME,
+) -> int | None:
     try:
-        collection = chroma_client().get_collection(COLLECTION_NAME)
+        collection = chroma_client().get_collection(collection_name)
     except NotFoundError:
         logger.info("Indice da creare: collezione non trovata")
         return None
@@ -50,7 +55,7 @@ def cached_chunk_count() -> int | None:
     if (
         type(count) is not int
         or count <= 0
-        or metadata.get("index_fingerprint") != index_fingerprint()
+        or metadata.get("index_fingerprint") != index_fingerprint(manifest_path)
         or collection.count() != count
     ):
         logger.info("Indice da ricreare: firma, modello o numero di blocchi non corrispondenti")
@@ -77,12 +82,13 @@ def chunk_text(text: str) -> list[str]:
     return chunks
 
 
-def load_chunks() -> list[tuple[str, dict[str, int | str]]]:
-    if not MANIFEST_PATH.is_file():
+def load_chunks(manifest_path: Path | None = None) -> list[tuple[str, dict[str, int | str]]]:
+    manifest_path = MANIFEST_PATH if manifest_path is None else manifest_path
+    if not manifest_path.is_file():
         raise SystemExit("Manifest not found. Run the preprocess service first.")
 
     chunks: list[tuple[str, dict[str, int | str]]] = []
-    with MANIFEST_PATH.open(encoding="utf-8") as manifest:
+    with manifest_path.open(encoding="utf-8") as manifest:
         for line in manifest:
             page = json.loads(line)
             native_text = str(page.get("text", ""))
@@ -111,9 +117,14 @@ def make_id(text: str, metadata: dict[str, int | str]) -> str:
     return hashlib.sha256(source.encode("utf-8")).hexdigest()
 
 
-def main(progress: Callable[[int, int, str], None] | None = None) -> None:
-    fingerprint = index_fingerprint()
-    chunks = load_chunks()
+def main(
+    progress: Callable[[int, int, str], None] | None = None,
+    *,
+    manifest_path: Path | None = None,
+    collection_name: str = COLLECTION_NAME,
+) -> None:
+    fingerprint = index_fingerprint(manifest_path)
+    chunks = load_chunks(manifest_path)
     if not chunks:
         raise SystemExit("No text was found in the manifest.")
     if progress:
@@ -121,10 +132,10 @@ def main(progress: Callable[[int, int, str], None] | None = None) -> None:
 
     client = chroma_client()
     try:
-        client.delete_collection(COLLECTION_NAME)
+        client.delete_collection(collection_name)
     except NotFoundError:
         pass
-    collection = client.create_collection(COLLECTION_NAME, metadata={"hnsw:space": "cosine"})
+    collection = client.create_collection(collection_name, metadata={"hnsw:space": "cosine"})
 
     for batch_start in range(0, len(chunks), EMBEDDING_BATCH_SIZE):
         batch = chunks[batch_start : batch_start + EMBEDDING_BATCH_SIZE]
@@ -140,7 +151,7 @@ def main(progress: Callable[[int, int, str], None] | None = None) -> None:
         if progress:
             progress(batch_start + len(batch), len(chunks), "Blocchi indicizzati")
 
-    if index_fingerprint() != fingerprint:
+    if index_fingerprint(manifest_path) != fingerprint:
         raise RuntimeError("Manifest o modello cambiati durante l'indicizzazione. Ripeti l'operazione.")
     collection.modify(
         metadata={
@@ -152,4 +163,7 @@ def main(progress: Callable[[int, int, str], None] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Index theory PDFs or Solid Edge manuals.")
+    parser.add_argument("--section", type=Section, choices=list(Section), default=Section.THEORY)
+    config = section_config(parser.parse_args().section)
+    main(manifest_path=config.manifest_path, collection_name=config.collection_name)

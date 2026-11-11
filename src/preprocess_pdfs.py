@@ -26,7 +26,16 @@ def file_digest(path: Path) -> str:
 
 
 def find_pdf_paths(input_dir: Path, max_files: int | None = None) -> list[Path]:
-    paths = sorted(input_dir.glob("*.pdf"), key=lambda path: path.name.casefold())
+    directories = [input_dir]
+    if input_dir == INPUT_DIR:
+        directories.append(input_dir / "teoria")
+    paths = sorted(
+        (path for directory in directories for path in directory.glob("*.pdf")),
+        key=lambda path: path.name.casefold(),
+    )
+    names = [path.name.casefold() for path in paths]
+    if len(names) != len(set(names)):
+        raise ValueError("PDF con lo stesso nome nella sezione. Rinomina i duplicati.")
     return paths if max_files is None else paths[:max_files]
 
 
@@ -49,9 +58,13 @@ def preprocessing_fingerprint(
     return hashlib.sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest()
 
 
-def cached_page_count() -> int | None:
-    manifest_path = OUTPUT_DIR / "pages.jsonl"
-    cache_path = OUTPUT_DIR / "preprocess-state.json"
+def cached_page_count(
+    input_dir: Path | None = None, output_dir: Path | None = None,
+) -> int | None:
+    input_dir = INPUT_DIR if input_dir is None else input_dir
+    output_dir = OUTPUT_DIR if output_dir is None else output_dir
+    manifest_path = output_dir / "pages.jsonl"
+    cache_path = output_dir / "preprocess-state.json"
     if not manifest_path.is_file() or not cache_path.is_file():
         logger.info("Preprocessing da eseguire: risultati o firma persistente mancanti")
         return None
@@ -63,7 +76,7 @@ def cached_page_count() -> int | None:
     if not isinstance(state, dict) or type(state.get("pages")) is not int or state["pages"] <= 0:
         logger.warning("Stato preprocessing incompleto: i risultati saranno rigenerati")
         return None
-    pdf_paths = find_pdf_paths(INPUT_DIR)
+    pdf_paths = find_pdf_paths(input_dir)
     if (
         not pdf_paths
         or state.get("input_fingerprint") != preprocessing_fingerprint(pdf_paths)

@@ -14,6 +14,12 @@
         <p class="subtitle">Domanda alle tue lezioni e verifica le fonti.</p>
       </header>
 
+      <nav class="section-switch" aria-label="Sezione di studio">
+        <button id="section-theory" type="button" data-section="theory" aria-pressed="true">Teoria</button>
+        <button id="section-practice" type="button" data-section="practice" aria-pressed="false">Pratica - Solid Edge</button>
+      </nav>
+      <p id="section-description" class="section-description">Concetti e spiegazioni dalle dispense teoriche.</p>
+
       <section id="startup-status" class="startup-status" aria-labelledby="startup-heading" aria-busy="true">
         <h2 id="startup-heading">Preparazione del sistema</h2>
         <p id="startup-summary" role="status">Connessione al server in corso...</p>
@@ -21,11 +27,27 @@
         <p id="startup-error" class="startup-error" role="alert" hidden></p>
       </section>
 
-      <section id="conversation" class="conversation" aria-live="polite">
+      <section id="conversation-theory" class="conversation" aria-label="Conversazione teorica" aria-live="polite">
         <article class="message assistant">Scrivi una domanda sulle dispense elaborate.</article>
+      </section>
+      <section id="conversation-practice" class="conversation" aria-label="Conversazione pratica" aria-live="polite" hidden>
+        <article class="message assistant">Chiedi una procedura di Solid Edge: usero solo i manuali della sezione pratica.</article>
       </section>
 
       <form id="chat-form" class="question-form">
+        <fieldset id="practice-settings" class="practice-settings" hidden>
+          <legend>Il tuo Solid Edge</legend>
+          <label for="cad-version">Versione (facoltativa)
+            <input id="cad-version" name="cad_version" type="text" maxlength="80" placeholder="Ad esempio: 2025">
+          </label>
+          <label for="cad-language">Lingua dei comandi
+            <select id="cad-language" name="cad_language">
+              <option value="Italiano">Italiano</option>
+              <option value="English">English</option>
+            </select>
+          </label>
+          <p>La compatibilita dei comandi viene verificata nei manuali, non presunta dalla versione indicata.</p>
+        </fieldset>
         <label class="sr-only" for="question">La tua domanda</label>
         <textarea id="question" name="question" rows="3" placeholder="Ad esempio: Spiegami il concetto di ..." required></textarea>
         <div class="form-actions">
