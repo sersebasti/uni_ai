@@ -25,7 +25,7 @@ def ocr_page(page: fitz.Page, dpi: int, languages: str) -> str:
     scale = dpi / 72
     pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
     result = subprocess.run(
-        ["tesseract", "stdin", "stdout", "-l", languages],
+        ["tesseract", "stdin", "stdout", "-l", languages, "--psm", "1"],
         input=pixmap.tobytes("png"),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

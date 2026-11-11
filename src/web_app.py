@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import threading
 import uuid
 from contextlib import asynccontextmanager
@@ -23,6 +24,7 @@ WEB_DIR = Path("web")
 MEDIA_DIR = Path("data/generated")
 DOCUMENTS_DIR = Path("materials/pdf")
 MAX_SOURCES = 6
+MAX_OVERVIEW_SOURCES = 20
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 
@@ -60,14 +62,55 @@ class IllustrationRequest(BaseModel):
     answer: str = Field(min_length=3, max_length=12_000)
 
 
+def is_course_overview(question: str) -> bool:
+    normalized = " ".join(question.casefold().split())
+    return bool(
+        re.search(r"\b(corso|dispense|lezioni)\b", normalized)
+        and re.search(
+            r"\b(di cosa parla|di cosa tratta|panoramica|programma|"
+            r"argomenti|riassunto|sintesi|presentazione|descrizione)\b",
+            normalized,
+        )
+    )
+
+
 def find_sources(question: str) -> list[dict[str, object]]:
     try:
         collection = chroma_client().get_collection(COLLECTION_NAME)
-        results = collection.query(
-            query_embeddings=create_embeddings([question]),
-            n_results=MAX_SOURCES,
-            include=["documents", "metadatas"],
-        )
+        if is_course_overview(question):
+            overview = collection.get(
+                where={"page": 1},
+                include=["documents", "metadatas"],
+            )
+            candidates = sorted(
+                [
+                    {"text": document, **metadata}
+                    for document, metadata in zip(
+                        overview["documents"], overview["metadatas"], strict=True
+                    )
+                ],
+                key=lambda source: (str(source["source_pdf"]), int(source["chunk"])),
+            )
+            sources = []
+            seen_documents = set()
+            for source in candidates:
+                document = str(source["source_pdf"])
+                if document not in seen_documents:
+                    sources.append(source)
+                    seen_documents.add(document)
+            sources = sources[:MAX_OVERVIEW_SOURCES]
+        else:
+            results = collection.query(
+                query_embeddings=create_embeddings([question]),
+                n_results=MAX_SOURCES,
+                include=["documents", "metadatas"],
+            )
+            sources = [
+                {"text": document, **metadata}
+                for document, metadata in zip(
+                    results["documents"][0], results["metadatas"][0], strict=True
+                )
+            ]
     except NotFoundError as error:
         raise HTTPException(
             status_code=503,
@@ -79,12 +122,12 @@ def find_sources(question: str) -> list[dict[str, object]]:
             detail="Il servizio di ricerca locale non e disponibile.",
         ) from error
 
-    documents = results["documents"][0]
-    metadatas = results["metadatas"][0]
-    return [
-        {"text": document, **metadata}
-        for document, metadata in zip(documents, metadatas, strict=True)
-    ]
+    if not sources:
+        raise HTTPException(
+            status_code=503,
+            detail="L'indice non contiene fonti utilizzabili per questa domanda.",
+        )
+    return sources
 
 
 def build_context(sources: list[dict[str, object]]) -> str:
@@ -208,6 +251,9 @@ async def chat(request: Request) -> dict[str, object]:
     except OpenAIError as error:
         raise HTTPException(status_code=502, detail="OpenAI non ha completato la risposta.") from error
     answer = completion.choices[0].message.content or "Non sono riuscito a generare una risposta."
+    unique_sources = {
+        (str(source["source_pdf"]), int(source["page"])): source for source in sources
+    }
 
     return {
         "answer": answer,
@@ -218,7 +264,7 @@ async def chat(request: Request) -> dict[str, object]:
                 source_pdf=str(source["source_pdf"]),
                 document_url=f"/api/documents/{quote(Path(str(source['source_pdf'])).name)}",
             ).model_dump()
-            for source in sources
+            for source in unique_sources.values()
         ],
     }
 

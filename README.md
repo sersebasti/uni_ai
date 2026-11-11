@@ -23,9 +23,11 @@ La chat si abilita solo quando tutte le fasi sono completate e la chiave OpenAI 
 
 A ogni avvio del servizio `web`, i PDF vengono rielaborati e l'indice ricreato; il modello gia scaricato viene riutilizzato da Ollama. Dopo aver modificato i PDF, esegui `docker compose restart web`. Non avviare contemporaneamente i servizi manuali `preprocess` e `indexer`, ne piu istanze o worker di `web`: la preparazione automatica gestisce lo stesso manifest e indice.
 
-`ollama` esegue localmente `bge-m3` per creare embedding; `chromadb` conserva l'indice vettoriale. Il preprocessing usa Tesseract in italiano e inglese sulle pagine con immagini o poco testo. Il testo OCR viene unito al testo nativo durante l'indicizzazione. I servizi manuali restano disponibili per manutenzione; per una verifica senza OCR usa `docker compose run --rm preprocess --skip-ocr`.
+`ollama` esegue localmente `bge-m3` per creare embedding; `chromadb` conserva l'indice vettoriale. Il preprocessing usa Tesseract in italiano e inglese sulle pagine con immagini o poco testo, con rilevamento automatico dell'orientamento per le scansioni ruotate. Il testo OCR viene unito al testo nativo durante l'indicizzazione. Gli indici prodotti con versioni precedenti devono essere rigenerati dal preprocessing per correggere il testo gia estratto. I servizi manuali restano disponibili per manutenzione; per una verifica senza OCR usa `docker compose run --rm preprocess --skip-ocr`.
 
 La chat cerca nell'indice vettoriale locale, invia a OpenAI solo le fonti più pertinenti e mostra le pagine usate per la risposta. Ogni fonte è un link che apre la relativa dispensa PDF in una nuova scheda.
+
+Per domande generali sul corso (ad esempio "Di cosa parla questo corso universitario?" o "Quali argomenti tratta il corso?"), la chat usa il primo blocco della prima pagina di ogni dispensa, fino a 20 dispense, anziche affidarsi ai soli sei risultati della ricerca semantica. Questa panoramica si basa sulle introduzioni disponibili, non garantisce di coprire tutte le pagine del corso. Le domande specifiche continuano a usare la ricerca semantica. Le citazioni della stessa pagina vengono mostrate una sola volta.
 
 Puoi allegare screenshot o immagini PNG, JPEG e WebP fino a 10 MB. L'immagine viene inviata a OpenAI insieme alla domanda e alle fonti selezionate. Per ogni risposta puoi inoltre scegliere di generare un'illustrazione esplicativa: il risultato viene salvato localmente in `data/generated/`.
 
