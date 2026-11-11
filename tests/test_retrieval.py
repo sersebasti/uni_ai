@@ -1,12 +1,14 @@
+import asyncio
+import os
 import subprocess
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import fitz
 from fastapi import HTTPException
 
 from src.preprocess_pdfs import ocr_page
-from src.web_app import find_sources, is_course_overview
+from src.web_app import ChatRequest, chat, find_sources, is_course_overview
 
 
 class RetrievalTests(unittest.TestCase):
@@ -67,6 +69,29 @@ class RetrievalTests(unittest.TestCase):
                 find_sources("di cosa parla questo corso?")
         self.assertEqual(raised.exception.status_code, 503)
         self.assertIn("fonti utilizzabili", raised.exception.detail)
+
+    def test_chat_keeps_chunk_context_but_deduplicates_page_links(self):
+        sources = [
+            {"text": "First part", "lecture": "L1", "source_pdf": "L1.pdf", "page": 1},
+            {"text": "Second part", "lecture": "L1", "source_pdf": "L1.pdf", "page": 1},
+        ]
+        with (
+            patch("src.web_app.require_ready"),
+            patch(
+                "src.web_app.parse_chat_request",
+                new=AsyncMock(return_value=(ChatRequest(question="Domanda di prova"), None, None)),
+            ),
+            patch("src.web_app.find_sources", return_value=sources),
+            patch("src.web_app.OpenAI") as openai,
+            patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}),
+        ):
+            completion = openai.return_value.chat.completions.create
+            completion.return_value.choices = [Mock(message=Mock(content="Risposta di prova"))]
+            result = asyncio.run(chat(Mock()))
+        self.assertEqual(len(result["sources"]), 1)
+        prompt = completion.call_args.kwargs["messages"][1]["content"]
+        self.assertIn("First part", prompt)
+        self.assertIn("Second part", prompt)
 
     def test_ocr_enables_orientation_detection_and_propagates_failure(self):
         page = Mock()
