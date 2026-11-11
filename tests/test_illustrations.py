@@ -27,6 +27,7 @@ class IllustrationTests(unittest.TestCase):
 
     def test_provider_errors_have_actionable_messages_without_exposing_raw_body(self):
         for status, code, expected in (
+            (400, "invalid_value", "OPENAI_IMAGE_MODEL"),
             (400, "billing_hard_limit_reached", "fatturazione"),
             (401, "invalid_api_key", "chiave API"),
             (403, None, "organizzazione"),
@@ -39,7 +40,11 @@ class IllustrationTests(unittest.TestCase):
                 response = httpx.Response(status, request=httpx.Request("POST", "https://api.openai.com/v1/images/generations"))
                 self.generate.side_effect = APIStatusError(
                     "sensitive provider message", response=response,
-                    body={"code": code, "message": "sensitive provider message"},
+                    body={
+                        "code": code,
+                        "message": "sensitive provider message",
+                        "param": "model" if code == "invalid_value" else None,
+                    },
                 )
                 with self.assertLogs("src.web_app", level="WARNING"):
                     with self.assertRaises(HTTPException) as raised:
@@ -80,6 +85,7 @@ class IllustrationTests(unittest.TestCase):
             self.assertEqual(saved.read_bytes(), image)
         self.assertTrue(result["image_url"].startswith("/media/illustration-"))
         self.generate.assert_called_once()
+        self.assertEqual(self.generate.call_args.kwargs["model"], os.environ.get("OPENAI_IMAGE_MODEL", "gpt-image-1.5"))
 
     def test_storage_failure_is_reported(self):
         self.generate.return_value = Mock(data=[Mock(b64_json="aW1hZ2U=")])

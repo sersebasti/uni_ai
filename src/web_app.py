@@ -285,7 +285,7 @@ def generate_illustration(request: IllustrationRequest) -> dict[str, str]:
         "or long passages of text. Only depict concepts supported by this answer.\n\n"
         f"Student question: {request.question}\n\nAnswer to illustrate: {request.answer}"
     )
-    model = os.environ.get("OPENAI_IMAGE_MODEL", "gpt-image-1")
+    model = os.environ.get("OPENAI_IMAGE_MODEL", "gpt-image-1.5")
     try:
         result = OpenAI(api_key=api_key).images.generate(
             model=model,
@@ -317,7 +317,7 @@ def generate_illustration(request: IllustrationRequest) -> dict[str, str]:
                 "OpenAI non autorizza la generazione immagini. Controlla i permessi del "
                 "progetto e l'eventuale verifica dell'organizzazione richiesta per il modello."
             )
-        elif error.status_code == 404:
+        elif error.status_code == 404 or (error.status_code == 400 and error.param == "model"):
             detail = "Modello immagini non disponibile. Controlla OPENAI_IMAGE_MODEL e i permessi."
         elif error.status_code == 429:
             detail = "Limite di richieste OpenAI raggiunto. Attendi prima di riprovare."
