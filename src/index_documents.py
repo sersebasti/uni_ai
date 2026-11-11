@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 from chromadb.errors import NotFoundError
@@ -67,10 +68,12 @@ def make_id(text: str, metadata: dict[str, int | str]) -> str:
     return hashlib.sha256(source.encode("utf-8")).hexdigest()
 
 
-def main() -> None:
+def main(progress: Callable[[int, int, str], None] | None = None) -> None:
     chunks = load_chunks()
     if not chunks:
         raise SystemExit("No text was found in the manifest.")
+    if progress:
+        progress(0, len(chunks), "Creazione embedding e indice vettoriale")
 
     client = chroma_client()
     try:
@@ -90,6 +93,8 @@ def main() -> None:
             embeddings=create_embeddings(documents),
         )
         print(f"Indexed {min(batch_start + len(batch), len(chunks))}/{len(chunks)} chunks")
+        if progress:
+            progress(batch_start + len(batch), len(chunks), "Blocchi indicizzati")
 
     print(f"Vector index ready: {len(chunks)} chunks")
 

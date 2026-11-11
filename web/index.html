@@ -14,6 +14,13 @@
         <p class="subtitle">Domanda alle tue lezioni e verifica le fonti.</p>
       </header>
 
+      <section id="startup-status" class="startup-status" aria-labelledby="startup-heading" aria-busy="true">
+        <h2 id="startup-heading">Preparazione del sistema</h2>
+        <p id="startup-summary" role="status">Connessione al server in corso...</p>
+        <ol id="startup-stages"></ol>
+        <p id="startup-error" class="startup-error" role="alert" hidden></p>
+      </section>
+
       <section id="conversation" class="conversation" aria-live="polite">
         <article class="message assistant">Scrivi una domanda sulle dispense elaborate.</article>
       </section>
@@ -26,7 +33,7 @@
           <label for="image" class="attachment-button">Allega immagine</label>
           <span id="attachment-name" class="attachment-name" aria-live="polite"></span>
           <button id="clear-image" type="button" class="clear-image" hidden>Rimuovi</button>
-          <button id="submit" type="submit">Invia</button>
+          <button id="submit" type="submit" disabled>Preparazione...</button>
         </div>
       </form>
     </main>

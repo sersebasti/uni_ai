@@ -5,6 +5,84 @@ const submitButton = document.querySelector("#submit");
 const imageInput = document.querySelector("#image");
 const attachmentName = document.querySelector("#attachment-name");
 const clearImageButton = document.querySelector("#clear-image");
+const startupPanel = document.querySelector("#startup-status");
+const startupHeading = document.querySelector("#startup-heading");
+const startupSummary = document.querySelector("#startup-summary");
+const startupStages = document.querySelector("#startup-stages");
+const startupError = document.querySelector("#startup-error");
+let systemReady = false;
+let chatBusy = false;
+
+function updateSubmitButton() {
+  submitButton.disabled = !systemReady || chatBusy;
+  submitButton.textContent = chatBusy ? "Attendi" : systemReady ? "Invia" : "Non pronto";
+}
+
+function renderStartup(state) {
+  systemReady = state.ready;
+  updateSubmitButton();
+  startupPanel.dataset.status = state.status;
+  startupPanel.setAttribute("aria-busy", String(state.status === "preparing"));
+  startupHeading.textContent = state.ready
+    ? "Sistema pronto"
+    : state.status === "error" ? "Preparazione non riuscita" : "Preparazione del sistema";
+  startupSummary.textContent = state.ready
+    ? "Puoi iniziare a fare domande sulle dispense."
+    : state.status === "error"
+      ? "Correggi il problema indicato e riavvia il servizio web."
+      : "Le attivita vengono eseguite in background. Puoi lasciare aperta questa pagina.";
+  startupError.hidden = !state.error;
+  startupError.textContent = state.error || "";
+  const labels = { pending: "In attesa", running: "In corso", done: "Completato", error: "Errore" };
+  const stages = state.stages.map((stage) => {
+    const item = document.createElement("li");
+    item.className = "startup-stage";
+    item.dataset.status = stage.status;
+    const title = document.createElement("strong");
+    title.textContent = `${stage.label} - ${labels[stage.status]}`;
+    const detail = document.createElement("span");
+    detail.textContent = stage.detail;
+    const progress = document.createElement("progress");
+    progress.setAttribute("aria-label", stage.label);
+    if (stage.status === "done") {
+      progress.max = 1;
+      progress.value = 1;
+    } else if (stage.total > 0) {
+      progress.max = stage.total;
+      progress.value = stage.completed;
+      const percent = Math.floor(stage.completed / stage.total * 100);
+      detail.textContent += stage.id === "model"
+        ? ` - ${percent}% del livello`
+        : ` - ${stage.completed}/${stage.total} (${percent}%)`;
+    } else if (stage.status !== "running") {
+      progress.max = 1;
+      progress.value = 0;
+    }
+    item.append(title, progress, detail);
+    return item;
+  });
+  startupStages.replaceChildren(...stages);
+}
+
+async function pollStartup() {
+  try {
+    const response = await fetch("/api/status", { cache: "no-store" });
+    if (!response.ok) throw new Error(`Stato non disponibile (HTTP ${response.status}).`);
+    renderStartup(await response.json());
+  } catch (error) {
+    systemReady = false;
+    updateSubmitButton();
+    startupPanel.setAttribute("aria-busy", "true");
+    startupHeading.textContent = "Connessione al server interrotta";
+    startupSummary.textContent = "Nuovo tentativo automatico tra pochi secondi.";
+    startupError.hidden = false;
+    startupError.textContent = error.message;
+  } finally {
+    window.setTimeout(pollStartup, systemReady ? 10000 : 1000);
+  }
+}
+
+pollStartup();
 
 function addMessage(content, role, sources = [], question = "") {
   const message = document.createElement("article");
@@ -82,7 +160,7 @@ clearImageButton.addEventListener("click", clearAttachment);
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const question = questionInput.value.trim();
-  if (!question) return;
+  if (!question || !systemReady || chatBusy) return;
 
   const formData = new FormData();
   formData.append("question", question);
@@ -91,8 +169,8 @@ form.addEventListener("submit", async (event) => {
   addMessage(`${question}${imageInput.files[0] ? "\n[Immagine allegata]" : ""}`, "user");
   questionInput.value = "";
   clearAttachment();
-  submitButton.disabled = true;
-  submitButton.textContent = "Attendi";
+  chatBusy = true;
+  updateSubmitButton();
 
   try {
     const response = await fetch("/api/chat", {
@@ -105,8 +183,8 @@ form.addEventListener("submit", async (event) => {
   } catch (error) {
     addMessage(error.message, "error");
   } finally {
-    submitButton.disabled = false;
-    submitButton.textContent = "Invia";
+    chatBusy = false;
+    updateSubmitButton();
     questionInput.focus();
   }
 });

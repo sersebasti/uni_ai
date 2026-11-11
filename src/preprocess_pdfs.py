@@ -4,6 +4,7 @@ import argparse
 import json
 import shutil
 import subprocess
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import fitz
@@ -40,6 +41,7 @@ def process_pdf(
     ocr_dpi: int,
     ocr_languages: str,
     skip_ocr: bool,
+    progress: Callable[[str], None] | None = None,
 ) -> list[dict[str, object]]:
     document = fitz.open(pdf_path)
     records: list[dict[str, object]] = []
@@ -78,13 +80,18 @@ def process_pdf(
                     "ocr_characters": len(ocr_text),
                 }
             )
+            if progress:
+                progress(f"{pdf_path.name} - pagina {page_index + 1}/{len(document)}")
     finally:
         document.close()
 
     return records
 
 
-def main() -> None:
+def main(
+    argv: Sequence[str] | None = None,
+    progress: Callable[[int, int, str], None] | None = None,
+) -> None:
     parser = argparse.ArgumentParser(
         description="Extract lecture text and render pages that need visual analysis."
     )
@@ -127,7 +134,7 @@ def main() -> None:
         type=int,
         help="Process only the first N PDFs, useful for a fast test.",
     )
-    arguments = parser.parse_args()
+    arguments = parser.parse_args(argv)
 
     if not arguments.input_dir.is_dir():
         raise SystemExit(f"PDF directory not found: {arguments.input_dir}")
@@ -145,8 +152,24 @@ def main() -> None:
     page_count = 0
     visual_page_count = 0
     ocr_page_count = 0
+    total_pages = 0
+    for pdf_path in pdf_paths:
+        with fitz.open(pdf_path) as document:
+            total_pages += len(document)
 
-    with manifest_path.open("w", encoding="utf-8") as manifest:
+    completed_pages = 0
+
+    def page_processed(detail: str) -> None:
+        nonlocal completed_pages
+        completed_pages += 1
+        if progress:
+            progress(completed_pages, total_pages, detail)
+
+    if progress:
+        progress(0, total_pages, "Estrazione testo, rendering e OCR")
+
+    temporary_manifest = manifest_path.with_suffix(".jsonl.tmp")
+    with temporary_manifest.open("w", encoding="utf-8") as manifest:
         for pdf_path in pdf_paths:
             records = process_pdf(
                 pdf_path,
@@ -155,6 +178,7 @@ def main() -> None:
                 arguments.ocr_dpi,
                 arguments.ocr_languages,
                 arguments.skip_ocr,
+                page_processed,
             )
             for record in records:
                 manifest.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -163,6 +187,7 @@ def main() -> None:
                 ocr_page_count += int(record["ocr_applied"])
             print(f"{pdf_path.name}: {len(records)} pages processed")
 
+    temporary_manifest.replace(manifest_path)
     print(f"\nManifest: {manifest_path}")
     print(
         f"Pages: {page_count}; visual candidates: {visual_page_count}; "

@@ -3,7 +3,9 @@ from __future__ import annotations
 import base64
 import json
 import os
+import threading
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
 
@@ -15,6 +17,7 @@ from openai import OpenAI, OpenAIError
 from pydantic import BaseModel, Field
 
 from src.rag import COLLECTION_NAME, chroma_client, create_embeddings
+from src.startup import Startup, StartupState
 
 WEB_DIR = Path("web")
 MEDIA_DIR = Path("data/generated")
@@ -23,7 +26,19 @@ MAX_SOURCES = 6
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 
-app = FastAPI(title="Uni AI")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    startup = Startup()
+    app.state.startup = startup
+    worker = threading.Thread(target=startup.run, name="startup", daemon=True)
+    worker.start()
+    try:
+        yield
+    finally:
+        startup.stop()
+
+
+app = FastAPI(title="Uni AI", lifespan=lifespan)
 MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 app.mount("/media", StaticFiles(directory=MEDIA_DIR), name="media")
@@ -130,6 +145,20 @@ def home() -> FileResponse:
     return FileResponse(WEB_DIR / "index.html")
 
 
+@app.get("/api/status")
+def status() -> StartupState:
+    return app.state.startup.snapshot()
+
+
+def require_ready() -> None:
+    state = app.state.startup.snapshot()
+    if not state["ready"]:
+        raise HTTPException(
+            status_code=503,
+            detail=state["error"] or "Preparazione in corso. Controlla lo stato di avanzamento.",
+        )
+
+
 @app.get("/api/documents/{filename}")
 def document(filename: str) -> FileResponse:
     if Path(filename).name != filename or not filename.endswith(".pdf"):
@@ -143,6 +172,7 @@ def document(filename: str) -> FileResponse:
 
 @app.post("/api/chat")
 async def chat(request: Request) -> dict[str, object]:
+    require_ready()
     chat_request, image_bytes, image_type = await parse_chat_request(request)
     sources = find_sources(chat_request.question)
 
@@ -195,6 +225,7 @@ async def chat(request: Request) -> dict[str, object]:
 
 @app.post("/api/illustrations")
 def generate_illustration(request: IllustrationRequest) -> dict[str, str]:
+    require_ready()
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         raise HTTPException(status_code=503, detail="OPENAI_API_KEY non configurata.")

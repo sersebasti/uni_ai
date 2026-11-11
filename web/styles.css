@@ -33,6 +33,25 @@ header { margin-bottom: 28px; }
 h1 { margin: 0; font-size: 2.8rem; }
 .subtitle { margin: 8px 0 0; font-size: 1.15rem; }
 
+.startup-status {
+  margin-bottom: 24px;
+  padding: 18px;
+  border: 1px solid #83988a;
+  border-radius: 8px;
+  background: #fffdf8;
+  font-family: ui-sans-serif, sans-serif;
+}
+.startup-status h2 { margin: 0; font-size: 1.1rem; }
+.startup-status p { line-height: 1.5; }
+#startup-stages { display: grid; gap: 16px; padding-left: 22px; }
+.startup-stage strong, .startup-stage span { display: block; font-size: 0.85rem; }
+.startup-stage span { margin-top: 4px; overflow-wrap: anywhere; color: #40594b; }
+.startup-stage progress { display: block; width: 100%; height: 12px; margin-top: 8px; accent-color: #245c46; }
+.startup-stage[data-status="pending"] { opacity: 0.65; }
+.startup-error, .startup-stage[data-status="error"] { color: #842b1d; }
+.startup-status[data-status="error"] { border-color: #c7614a; }
+.startup-status[data-status="ready"] { border-color: #245c46; }
+
 .conversation {
   display: grid;
   gap: 14px;
