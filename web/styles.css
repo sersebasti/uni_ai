@@ -51,7 +51,12 @@ h1 { margin: 0; font-size: 2.8rem; }
   background: #fffdf8;
   font-family: ui-sans-serif, sans-serif;
 }
-.startup-status h2 { margin: 0; font-size: 1.1rem; }
+.startup-status summary { cursor: pointer; font-weight: 700; line-height: 1.5; }
+.startup-status summary:focus-visible { outline: 2px solid #245c46; outline-offset: 4px; }
+.startup-status h2 { margin: 16px 0 0; font-size: 1.1rem; }
+#startup-indicator { display: inline-block; margin-left: 10px; font-size: 0.85rem; font-weight: 400; }
+.startup-status[data-status="ready"] #startup-indicator { color: #245c46; }
+.startup-status[data-status="error"] #startup-indicator { color: #842b1d; }
 .startup-status p { line-height: 1.5; }
 #startup-stages { display: grid; gap: 16px; padding-left: 22px; }
 .startup-stage strong, .startup-stage span { display: block; font-size: 0.85rem; }

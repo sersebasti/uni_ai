@@ -14,6 +14,7 @@ const imageInput = document.querySelector("#image");
 const attachmentName = document.querySelector("#attachment-name");
 const clearImageButton = document.querySelector("#clear-image");
 const startupPanel = document.querySelector("#startup-status");
+const startupIndicator = document.querySelector("#startup-indicator");
 const startupHeading = document.querySelector("#startup-heading");
 const startupSummary = document.querySelector("#startup-summary");
 const startupStages = document.querySelector("#startup-stages");
@@ -35,6 +36,10 @@ function renderStartup(state) {
   systemReady = state.ready;
   updateSubmitButton();
   startupPanel.dataset.status = state.status;
+  startupIndicator.textContent = state.ready
+    ? "Pronto"
+    : state.status === "empty" ? "Nessun PDF"
+      : state.status === "error" ? "Errore" : "In preparazione";
   startupPanel.setAttribute("aria-busy", String(state.status === "preparing"));
   startupHeading.textContent = state.ready
     ? "Sistema pronto"
@@ -92,6 +97,8 @@ async function pollStartup() {
     if (generation !== statusGeneration) return;
     systemReady = false;
     updateSubmitButton();
+    startupPanel.dataset.status = "error";
+    startupIndicator.textContent = "Connessione interrotta";
     startupPanel.setAttribute("aria-busy", "true");
     startupHeading.textContent = "Connessione al server interrotta";
     startupSummary.textContent = "Nuovo tentativo automatico tra pochi secondi.";
@@ -132,6 +139,7 @@ for (const button of sectionButtons) {
     startupError.hidden = true;
     startupPanel.setAttribute("aria-busy", "true");
     startupPanel.dataset.status = "preparing";
+    startupIndicator.textContent = "Verifica in corso...";
     window.clearTimeout(statusTimer);
     pollStartup();
   });

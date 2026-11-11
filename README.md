@@ -27,6 +27,8 @@ Apri `http://localhost:8000`. Dopo la build e l'avvio del server, l'interfaccia 
 
 Ogni sezione si abilita quando le proprie fasi sono completate e la chiave OpenAI e configurata. Errori di elaborazione, servizi non disponibili e configurazione mancante sono mostrati nella pagina. Lo stato viene aggiornato automaticamente, anche ricaricando la pagina, tramite `/api/status?section=theory` oppure `/api/status?section=practice`; senza parametro viene restituito lo stato teorico.
 
+Il pannello **Preparazione sistema** e chiuso per impostazione predefinita: clicca sul titolo per aprire o richiudere i dettagli delle fasi. Il riepilogo resta visibile anche da chiuso e segnala sistema pronto, elaborazione, documenti mancanti o errori. Gli aggiornamenti automatici non modificano la scelta di apertura del pannello.
+
 ## Teoria e pratica Solid Edge
 
 I pulsanti **Teoria** e **Pratica - Solid Edge** selezionano conversazioni e fonti distinte. Le conversazioni, le bozze e gli allegati restano separati durante il cambio sezione; come prima, la cronologia della chat non e persistita dopo il ricaricamento della pagina.
@@ -45,13 +47,13 @@ Dopo aver aggiunto, modificato o rimosso PDF, esegui `docker compose restart web
 
 Le firme vengono salvate solo dopo il completamento. La teoria conserva `data/processed/preprocess-state.json`, il manifest esistente e la collezione ChromaDB `university_notes`. La pratica usa `data/processed/pratica/` e la collezione `solid_edge_manuals`. Risultati parziali, firme mancanti o non valide richiedono una nuova elaborazione della sola sezione interessata. Al primo avvio dopo l'aggiornamento da una versione senza firme e necessaria una preparazione completa, una sola volta; il passaggio alle due sezioni conserva invece le firme teoriche gia valide. Conserva sia `data/processed/` sia il volume ChromaDB tra i riavvii. Le versioni di elaborazione nel codice devono essere incrementate quando cambia la logica di estrazione/OCR o di indicizzazione.
 
-`ollama` esegue localmente `bge-m3` per creare embedding; `chromadb` conserva l'indice vettoriale. Il preprocessing usa Tesseract in italiano e inglese sulle pagine con immagini o poco testo, con rilevamento automatico dell'orientamento per le scansioni ruotate. Il testo OCR viene unito al testo nativo durante l'indicizzazione. Gli indici prodotti con versioni precedenti devono essere rigenerati dal preprocessing per correggere il testo gia estratto. I servizi manuali restano disponibili per manutenzione; per una verifica senza OCR usa `docker compose run --rm preprocess --skip-ocr`.
+`ollama` esegue localmente `bge-m3` per creare embedding; `chromadb` conserva l'indice vettoriale. Il preprocessing usa Tesseract in italiano e inglese sulle pagine con immagini o poco testo, con rilevamento automatico dell'orientamento per le scansioni ruotate. Il testo OCR viene unito al testo nativo durante l'indicizzazione. Gli indici prodotti con versioni precedenti devono essere rigenerati dal preprocessing per correggere il testo gia estratto. I servizi manuali restano disponibili per manutenzione; per una verifica senza OCR usa `docker compose run --build --rm preprocess python src/preprocess_pdfs.py --skip-ocr`.
 
 Per elaborare manualmente solo la pratica, a servizio web fermo:
 
 ```bash
-docker compose run --rm preprocess --input-dir materials/pdf/pratica --output-dir data/processed/pratica
-docker compose run --rm indexer --section practice
+docker compose run --build --rm preprocess python src/preprocess_pdfs.py --input-dir materials/pdf/pratica --output-dir data/processed/pratica
+docker compose run --build --rm indexer python -m src.index_documents --section practice
 ```
 
 Il servizio manuale `indexer` senza parametri continua a indicizzare la teoria.
@@ -80,7 +82,7 @@ Preprocessing locale di slide PDF per preparare domande di disegno tecnico al ca
 Installa e avvia Docker Desktop, poi esegui:
 
 ```powershell
-docker compose run --rm preprocess
+docker compose run --build --rm preprocess
 ```
 
 Il container legge i PDF da `materials/pdf` in sola lettura e salva manifest e render in `data/processed` sul PC. La chiave API non viene copiata nel container.

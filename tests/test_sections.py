@@ -141,12 +141,28 @@ class SectionTests(unittest.TestCase):
         self.assertTrue(theory.snapshot()["ready"])
         self.assertIsNotNone(index_documents.cached_chunk_count())
 
+    def test_empty_theory_does_not_block_practice(self):
+        (self.pdf_root / "legacy.pdf").unlink()
+        (self.theory_dir / "common.pdf").unlink()
+        theory = Startup(Section.THEORY)
+        theory.run()
+        self.assertEqual(theory.snapshot()["status"], "empty")
+        self.prepare(Section.PRACTICE)
+
     def test_document_links_disambiguate_identical_names_between_sections(self):
         theory_pdf = web_app.document("common.pdf", Section.THEORY)
         practice_pdf = web_app.document("common.pdf", Section.PRACTICE)
         self.assertEqual(theory_pdf.path, self.theory_dir / "common.pdf")
         self.assertEqual(practice_pdf.path, self.practice_dir / "common.pdf")
         self.assertEqual(web_app.document("legacy.pdf").path, self.pdf_root / "legacy.pdf")
+        with patch.object(Startup, "run"), TestClient(web_app.app) as client:
+            for section, path in (
+                ("theory", self.theory_dir / "common.pdf"),
+                ("practice", self.practice_dir / "common.pdf"),
+            ):
+                response = client.get(f"/api/documents/common.pdf?section={section}")
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.content, path.read_bytes())
         with self.assertRaises(HTTPException) as raised:
             web_app.document("legacy.pdf", Section.PRACTICE)
         self.assertEqual(raised.exception.status_code, 404)
@@ -209,6 +225,24 @@ class SectionTests(unittest.TestCase):
             self.assertEqual(client.post("/api/illustrations", json={
                 "question": "Domanda valida", "answer": "Risposta valida", "section": "unknown",
             }).status_code, 422)
+
+    def test_practical_attachments_keep_type_and_size_limits(self):
+        with (
+            patch.object(Startup, "run"),
+            patch.object(web_app, "OpenAI") as openai,
+            TestClient(web_app.app) as client,
+        ):
+            body = {"question": "Come creo un foro?", "section": "practice"}
+            response = client.post(
+                "/api/chat", data=body, files={"image": ("screen.gif", b"gif", "image/gif")},
+            )
+            self.assertEqual(response.status_code, 415)
+            response = client.post(
+                "/api/chat", data=body,
+                files={"image": ("large.png", b"x" * (web_app.MAX_IMAGE_BYTES + 1), "image/png")},
+            )
+            self.assertEqual(response.status_code, 413)
+            openai.assert_not_called()
 
 
 if __name__ == "__main__":

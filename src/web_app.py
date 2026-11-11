@@ -13,11 +13,12 @@ from pathlib import Path
 from urllib.parse import quote
 
 from chromadb.errors import NotFoundError
-from fastapi import FastAPI, HTTPException, Request, UploadFile
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI, OpenAIError
 from pydantic import BaseModel, Field
+from starlette.datastructures import UploadFile
 
 from src.rag import chroma_client, create_embeddings
 from src.sections import Section, section_config
@@ -158,27 +159,27 @@ async def parse_chat_request(request: Request) -> tuple[ChatRequest, bytes | Non
         except ValueError as error:
             raise HTTPException(status_code=422, detail="Domanda non valida.") from error
 
-    form = await request.form()
-    try:
-        chat_request = ChatRequest.model_validate({
-            "question": str(form.get("question", "")),
-            "section": str(form.get("section", Section.THEORY.value)),
-            "cad_version": str(form.get("cad_version", "")),
-            "cad_language": str(form.get("cad_language", "Italiano")),
-        })
-    except ValueError as error:
-        raise HTTPException(status_code=422, detail="Domanda non valida.") from error
+    async with request.form() as form:
+        try:
+            chat_request = ChatRequest.model_validate({
+                "question": str(form.get("question", "")),
+                "section": str(form.get("section", Section.THEORY.value)),
+                "cad_version": str(form.get("cad_version", "")),
+                "cad_language": str(form.get("cad_language", "Italiano")),
+            })
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail="Domanda non valida.") from error
 
-    attachment = form.get("image")
-    if not isinstance(attachment, UploadFile) or not attachment.filename:
-        return chat_request, None, None
-    if attachment.content_type not in ALLOWED_IMAGE_TYPES:
-        raise HTTPException(status_code=415, detail="Usa un'immagine PNG, JPEG o WebP.")
+        attachment = form.get("image")
+        if not isinstance(attachment, UploadFile) or not attachment.filename:
+            return chat_request, None, None
+        if attachment.content_type not in ALLOWED_IMAGE_TYPES:
+            raise HTTPException(status_code=415, detail="Usa un'immagine PNG, JPEG o WebP.")
 
-    image_bytes = await attachment.read(MAX_IMAGE_BYTES + 1)
-    if len(image_bytes) > MAX_IMAGE_BYTES:
-        raise HTTPException(status_code=413, detail="L'immagine supera il limite di 10 MB.")
-    return chat_request, image_bytes, attachment.content_type
+        image_bytes = await attachment.read(MAX_IMAGE_BYTES + 1)
+        if len(image_bytes) > MAX_IMAGE_BYTES:
+            raise HTTPException(status_code=413, detail="L'immagine supera il limite di 10 MB.")
+        return chat_request, image_bytes, attachment.content_type
 
 
 def build_user_content(
