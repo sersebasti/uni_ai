@@ -55,9 +55,10 @@ h1 { margin: 0; font-size: 2.8rem; }
 .conversation {
   display: grid;
   gap: 14px;
-  min-height: 360px;
   padding-bottom: 20px;
 }
+
+.conversation:empty { display: none; }
 
 .message {
   width: fit-content;
