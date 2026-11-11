@@ -20,6 +20,19 @@ def embedding_model() -> str:
     return os.environ.get("OLLAMA_EMBEDDING_MODEL", "bge-m3")
 
 
+def embedding_model_digest() -> str:
+    response = httpx.get(
+        f"{os.environ.get('OLLAMA_URL', 'http://localhost:11434')}/api/tags",
+        timeout=10,
+    )
+    response.raise_for_status()
+    name = embedding_model()
+    for model in response.json()["models"]:
+        if model["name"] in {name, f"{name}:latest"} and model.get("digest"):
+            return model["digest"]
+    raise RuntimeError(f"Modello embedding non disponibile in Ollama: {name}")
+
+
 def create_embeddings(texts: Sequence[str]) -> list[list[float]]:
     response = httpx.post(
         f"{os.environ.get('OLLAMA_URL', 'http://localhost:11434')}/api/embed",

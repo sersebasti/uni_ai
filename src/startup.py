@@ -142,19 +142,30 @@ class Startup:
             for stage_id, _ in STAGES:
                 current_stage = stage_id
                 self.update(stage_id, detail="Avvio attivita")
+                completion_detail = "Completato"
                 if stage_id == "services":
                     self.wait_for_services()
                 elif stage_id == "model":
                     self.prepare_model()
                 elif stage_id == "preprocess":
-                    preprocess_pdfs.main([], progress=self.progress(stage_id))
+                    page_count = preprocess_pdfs.cached_page_count()
+                    if page_count is None:
+                        preprocess_pdfs.main([], progress=self.progress(stage_id))
+                    else:
+                        completion_detail = f"Riutilizzate {page_count} pagine gia elaborate"
+                        self.update(stage_id, page_count, page_count, completion_detail)
                 else:
-                    index_documents.main(progress=self.progress(stage_id))
+                    chunk_count = index_documents.cached_chunk_count()
+                    if chunk_count is None:
+                        index_documents.main(progress=self.progress(stage_id))
+                    else:
+                        completion_detail = f"Indice esistente riutilizzato: {chunk_count} blocchi"
+                        self.update(stage_id, chunk_count, chunk_count, completion_detail)
                 with self._lock:
                     stage = next(
                         stage for stage in self._state["stages"] if stage["id"] == stage_id
                     )
-                    stage.update(status="done", detail="Completato")
+                    stage.update(status="done", detail=completion_detail)
             if not os.environ.get("OPENAI_API_KEY"):
                 raise RuntimeError(
                     "OPENAI_API_KEY non configurata. Impostala nel file .env e riavvia web."

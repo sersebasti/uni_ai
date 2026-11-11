@@ -2,17 +2,60 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Callable
 from pathlib import Path
 
 from chromadb.errors import NotFoundError
 
-from src.rag import COLLECTION_NAME, chroma_client, create_embeddings
+from src.preprocess_pdfs import file_digest
+from src.rag import (
+    COLLECTION_NAME,
+    chroma_client,
+    create_embeddings,
+    embedding_model,
+    embedding_model_digest,
+)
 
 MANIFEST_PATH = Path("data/processed/pages.jsonl")
 CHUNK_SIZE = 1_200
 CHUNK_OVERLAP = 200
 EMBEDDING_BATCH_SIZE = 32
+INDEX_VERSION = 1
+logger = logging.getLogger(__name__)
+
+
+def index_fingerprint() -> str:
+    if not MANIFEST_PATH.is_file():
+        raise SystemExit("Manifest not found. Run the preprocess service first.")
+    settings = {
+        "version": INDEX_VERSION,
+        "manifest": file_digest(MANIFEST_PATH),
+        "chunk_size": CHUNK_SIZE,
+        "chunk_overlap": CHUNK_OVERLAP,
+        "embedding_model": embedding_model(),
+        "embedding_digest": embedding_model_digest(),
+    }
+    return hashlib.sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest()
+
+
+def cached_chunk_count() -> int | None:
+    try:
+        collection = chroma_client().get_collection(COLLECTION_NAME)
+    except NotFoundError:
+        logger.info("Indice da creare: collezione non trovata")
+        return None
+    metadata = collection.metadata or {}
+    count = metadata.get("indexed_chunks")
+    if (
+        type(count) is not int
+        or count <= 0
+        or metadata.get("index_fingerprint") != index_fingerprint()
+        or collection.count() != count
+    ):
+        logger.info("Indice da ricreare: firma, modello o numero di blocchi non corrispondenti")
+        return None
+    return count
 
 
 def chunk_text(text: str) -> list[str]:
@@ -69,6 +112,7 @@ def make_id(text: str, metadata: dict[str, int | str]) -> str:
 
 
 def main(progress: Callable[[int, int, str], None] | None = None) -> None:
+    fingerprint = index_fingerprint()
     chunks = load_chunks()
     if not chunks:
         raise SystemExit("No text was found in the manifest.")
@@ -96,6 +140,14 @@ def main(progress: Callable[[int, int, str], None] | None = None) -> None:
         if progress:
             progress(batch_start + len(batch), len(chunks), "Blocchi indicizzati")
 
+    if index_fingerprint() != fingerprint:
+        raise RuntimeError("Manifest o modello cambiati durante l'indicizzazione. Ripeti l'operazione.")
+    collection.modify(
+        metadata={
+            "index_fingerprint": fingerprint,
+            "indexed_chunks": len(chunks),
+        }
+    )
     print(f"Vector index ready: {len(chunks)} chunks")
 
 

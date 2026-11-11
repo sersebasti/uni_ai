@@ -15,6 +15,15 @@ from src.web_app import app
 
 
 class StartupTests(unittest.TestCase):
+    def setUp(self):
+        for target in (
+            "src.startup.preprocess_pdfs.cached_page_count",
+            "src.startup.index_documents.cached_chunk_count",
+        ):
+            cache = patch(target, return_value=None)
+            cache.start()
+            self.addCleanup(cache.stop)
+
     def test_preparation_reports_progress_and_becomes_ready(self):
         startup = Startup()
 
@@ -158,12 +167,49 @@ class StartupTests(unittest.TestCase):
         client = Mock()
         with (
             patch.object(index_documents, "load_chunks", return_value=chunks),
+            patch.object(index_documents, "index_fingerprint", return_value="fingerprint"),
             patch.object(index_documents, "chroma_client", return_value=client),
             patch.object(index_documents, "create_embeddings", side_effect=lambda docs: [[1.0]] * len(docs)),
         ):
             index_documents.main(progress=progress)
         self.assertEqual([call.args[:2] for call in progress.call_args_list], [(0, 33), (32, 33), (33, 33)])
         self.assertEqual(client.create_collection.return_value.upsert.call_count, 2)
+        client.create_collection.return_value.modify.assert_called_once_with(
+            metadata={"index_fingerprint": "fingerprint", "indexed_chunks": 33}
+        )
+
+    def test_cached_results_skip_ocr_and_embedding_on_web_restart(self):
+        startup = Startup()
+        with (
+            patch.object(startup, "wait_for_services"),
+            patch.object(startup, "prepare_model"),
+            patch("src.startup.preprocess_pdfs.cached_page_count", return_value=468),
+            patch("src.startup.index_documents.cached_chunk_count", return_value=517),
+            patch("src.startup.preprocess_pdfs.main") as preprocess,
+            patch("src.startup.index_documents.main") as index,
+            patch.dict(os.environ, {"OPENAI_API_KEY": "test-key", "OPENAI_IMAGE_MODEL": "changed-model"}),
+        ):
+            startup.run()
+        self.assertTrue(startup.snapshot()["ready"])
+        preprocess.assert_not_called()
+        index.assert_not_called()
+        self.assertIn("Riutilizzate", startup.snapshot()["stages"][2]["detail"])
+        self.assertIn("riutilizzato", startup.snapshot()["stages"][3]["detail"])
+
+    def test_missing_index_rebuilds_without_repeating_preprocessing(self):
+        startup = Startup()
+        with (
+            patch.object(startup, "wait_for_services"),
+            patch.object(startup, "prepare_model"),
+            patch("src.startup.preprocess_pdfs.cached_page_count", return_value=468),
+            patch("src.startup.preprocess_pdfs.main") as preprocess,
+            patch("src.startup.index_documents.main") as index,
+            patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}),
+        ):
+            startup.run()
+        self.assertTrue(startup.snapshot()["ready"])
+        preprocess.assert_not_called()
+        index.assert_called_once()
 
 
 if __name__ == "__main__":

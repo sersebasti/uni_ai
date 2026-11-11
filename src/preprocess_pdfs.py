@@ -1,13 +1,83 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import logging
 import shutil
 import subprocess
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import fitz
+
+logger = logging.getLogger(__name__)
+PREPROCESS_VERSION = 1
+INPUT_DIR = Path("materials/pdf")
+OUTPUT_DIR = Path("data/processed")
+DEFAULT_DPI = 144
+DEFAULT_OCR_DPI = 300
+DEFAULT_OCR_LANGUAGES = "ita+eng"
+
+
+def file_digest(path: Path) -> str:
+    with path.open("rb") as source:
+        return hashlib.file_digest(source, "sha256").hexdigest()
+
+
+def find_pdf_paths(input_dir: Path, max_files: int | None = None) -> list[Path]:
+    paths = sorted(input_dir.glob("*.pdf"), key=lambda path: path.name.casefold())
+    return paths if max_files is None else paths[:max_files]
+
+
+def preprocessing_fingerprint(
+    pdf_paths: list[Path],
+    dpi: int = DEFAULT_DPI,
+    ocr_dpi: int = DEFAULT_OCR_DPI,
+    ocr_languages: str = DEFAULT_OCR_LANGUAGES,
+    skip_ocr: bool = False,
+) -> str:
+    settings = {
+        "version": PREPROCESS_VERSION,
+        "pymupdf": fitz.VersionBind,
+        "dpi": dpi,
+        "ocr_dpi": ocr_dpi,
+        "ocr_languages": ocr_languages,
+        "skip_ocr": skip_ocr,
+        "pdfs": [(path.as_posix(), file_digest(path)) for path in pdf_paths],
+    }
+    return hashlib.sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest()
+
+
+def cached_page_count() -> int | None:
+    manifest_path = OUTPUT_DIR / "pages.jsonl"
+    cache_path = OUTPUT_DIR / "preprocess-state.json"
+    if not manifest_path.is_file() or not cache_path.is_file():
+        logger.info("Preprocessing da eseguire: risultati o firma persistente mancanti")
+        return None
+    try:
+        state = json.loads(cache_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        logger.warning("Firma preprocessing non valida: i risultati saranno rigenerati")
+        return None
+    if not isinstance(state, dict) or type(state.get("pages")) is not int or state["pages"] <= 0:
+        logger.warning("Stato preprocessing incompleto: i risultati saranno rigenerati")
+        return None
+    pdf_paths = find_pdf_paths(INPUT_DIR)
+    if (
+        not pdf_paths
+        or state.get("input_fingerprint") != preprocessing_fingerprint(pdf_paths)
+        or state.get("manifest_digest") != file_digest(manifest_path)
+    ):
+        logger.info("Preprocessing da eseguire: PDF, impostazioni o manifest modificati")
+        return None
+    with manifest_path.open(encoding="utf-8") as manifest:
+        for line in manifest:
+            render_path = json.loads(line).get("render_path")
+            if render_path and not Path(render_path).is_file():
+                logger.info("Preprocessing da eseguire: rendering mancante (%s)", render_path)
+                return None
+    return state["pages"]
 
 
 def page_is_visual(drawing_count: int, text_length: int) -> bool:
@@ -97,31 +167,31 @@ def main(
     )
     parser.add_argument(
         "--input-dir",
-        default="materials/pdf",
+        default=INPUT_DIR,
         type=Path,
         help="Directory containing lecture PDFs.",
     )
     parser.add_argument(
         "--output-dir",
-        default="data/processed",
+        default=OUTPUT_DIR,
         type=Path,
         help="Directory for the generated manifest and page renders.",
     )
     parser.add_argument(
         "--dpi",
-        default=144,
+        default=DEFAULT_DPI,
         type=int,
         help="Render resolution for visual pages.",
     )
     parser.add_argument(
         "--ocr-dpi",
-        default=300,
+        default=DEFAULT_OCR_DPI,
         type=int,
         help="Render resolution used by OCR.",
     )
     parser.add_argument(
         "--ocr-languages",
-        default="ita+eng",
+        default=DEFAULT_OCR_LANGUAGES,
         help="Tesseract language codes used for OCR.",
     )
     parser.add_argument(
@@ -141,12 +211,20 @@ def main(
     if arguments.dpi <= 0 or arguments.ocr_dpi <= 0:
         raise SystemExit("DPI values must be greater than zero.")
 
-    pdf_paths = sorted(arguments.input_dir.glob("*.pdf"), key=lambda path: path.name.casefold())
-    if arguments.max_files is not None:
-        pdf_paths = pdf_paths[: arguments.max_files]
+    pdf_paths = find_pdf_paths(arguments.input_dir, arguments.max_files)
     if not pdf_paths:
         raise SystemExit(f"No PDF files found in: {arguments.input_dir}")
 
+    def fingerprint(paths: list[Path]) -> str:
+        return preprocessing_fingerprint(
+            paths,
+            arguments.dpi,
+            arguments.ocr_dpi,
+            arguments.ocr_languages,
+            arguments.skip_ocr,
+        )
+
+    input_fingerprint = fingerprint(pdf_paths)
     arguments.output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = arguments.output_dir / "pages.jsonl"
     page_count = 0
@@ -187,7 +265,22 @@ def main(
                 ocr_page_count += int(record["ocr_applied"])
             print(f"{pdf_path.name}: {len(records)} pages processed")
 
+    if fingerprint(find_pdf_paths(arguments.input_dir, arguments.max_files)) != input_fingerprint:
+        raise RuntimeError("I PDF sono cambiati durante il preprocessing. Ripeti l'elaborazione.")
     temporary_manifest.replace(manifest_path)
+    cache_path = arguments.output_dir / "preprocess-state.json"
+    temporary_cache = cache_path.with_suffix(".json.tmp")
+    temporary_cache.write_text(
+        json.dumps(
+            {
+                "input_fingerprint": input_fingerprint,
+                "manifest_digest": file_digest(manifest_path),
+                "pages": page_count,
+            }
+        ),
+        encoding="utf-8",
+    )
+    temporary_cache.replace(cache_path)
     print(f"\nManifest: {manifest_path}")
     print(
         f"Pages: {page_count}; visual candidates: {visual_page_count}; "
