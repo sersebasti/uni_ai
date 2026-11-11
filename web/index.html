@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Uni AI</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header>
+        <p class="eyebrow">Dispense universitarie</p>
+        <h1>Uni AI</h1>
+        <p class="subtitle">Domanda alle tue lezioni e verifica le fonti.</p>
+      </header>
+
+      <section id="conversation" class="conversation" aria-live="polite">
+        <article class="message assistant">Scrivi una domanda sulle dispense elaborate.</article>
+      </section>
+
+      <form id="chat-form" class="question-form">
+        <label class="sr-only" for="question">La tua domanda</label>
+        <textarea id="question" name="question" rows="3" placeholder="Ad esempio: Spiegami il concetto di ..." required></textarea>
+        <div class="form-actions">
+          <input id="image" name="image" type="file" accept="image/png,image/jpeg,image/webp" class="sr-only">
+          <label for="image" class="attachment-button">Allega immagine</label>
+          <span id="attachment-name" class="attachment-name" aria-live="polite"></span>
+          <button id="clear-image" type="button" class="clear-image" hidden>Rimuovi</button>
+          <button id="submit" type="submit">Invia</button>
+        </div>
+      </form>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

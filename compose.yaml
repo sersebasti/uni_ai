@@ -1,0 +1,73 @@
+services:
+  preprocess:
+    build:
+      context: .
+    image: uni-ai-preprocess:local
+    volumes:
+      - ./materials:/app/materials:ro
+      - ./data:/app/data
+    command: ["python", "src/preprocess_pdfs.py"]
+
+  web:
+    build:
+      context: .
+    image: uni-ai-web:local
+    ports:
+      - "8000:8000"
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?Set OPENAI_API_KEY in your environment or .env file}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4.1-mini}
+      OPENAI_IMAGE_MODEL: ${OPENAI_IMAGE_MODEL:-gpt-image-1}
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-bge-m3}
+      CHROMA_HOST: chromadb
+      CHROMA_PORT: 8000
+    volumes:
+      - ./data:/app/data
+      - ./materials/pdf:/app/materials/pdf:ro
+    depends_on:
+      - ollama
+      - chromadb
+    command: ["uvicorn", "src.web_app:app", "--host", "0.0.0.0", "--port", "8000"]
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_models:/root/.ollama
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-bge-m3}
+    depends_on:
+      - ollama
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["until ollama list >/dev/null 2>&1; do sleep 2; done; ollama pull $$OLLAMA_EMBEDDING_MODEL"]
+
+  chromadb:
+    image: chromadb/chroma:latest
+    environment:
+      IS_PERSISTENT: "TRUE"
+    volumes:
+      - chroma_data:/chroma/chroma
+
+  indexer:
+    build:
+      context: .
+    image: uni-ai-indexer:local
+    environment:
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-bge-m3}
+      CHROMA_HOST: chromadb
+      CHROMA_PORT: 8000
+    volumes:
+      - ./data:/app/data:ro
+    depends_on:
+      - ollama
+      - chromadb
+    command: ["python", "-m", "src.index_documents"]
+
+volumes:
+  ollama_models:
+  chroma_data:
