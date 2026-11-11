@@ -31,6 +31,8 @@ Per domande generali sul corso (ad esempio "Di cosa parla questo corso universit
 
 Puoi allegare screenshot o immagini PNG, JPEG e WebP fino a 10 MB. L'immagine viene inviata a OpenAI insieme alla domanda e alle fonti selezionate. Per ogni risposta puoi inoltre scegliere di generare un'illustrazione esplicativa: il risultato viene salvato localmente in `data/generated/`.
 
+La generazione delle illustrazioni usa `OPENAI_IMAGE_MODEL` (default `gpt-image-1`), richiede accesso alle API immagini e puo comportare costi aggiuntivi. Se fallisce, il motivo viene mostrato sotto il pulsante: controlla credito e limiti API, permessi del progetto ed eventuale verifica dell'organizzazione. Il fatto che la chat funzioni non garantisce l'accesso alla generazione immagini. I log del servizio web riportano stato HTTP, codice errore e identificativo della richiesta OpenAI, senza la chiave API.
+
 # Uni AI
 
 Preprocessing locale di slide PDF per preparare domande di disegno tecnico al calcolatore.

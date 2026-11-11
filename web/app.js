@@ -113,17 +113,33 @@ function addMessage(content, role, sources = [], question = "") {
     illustrationButton.type = "button";
     illustrationButton.className = "illustration-button";
     illustrationButton.textContent = "Genera immagine";
+    const illustrationError = document.createElement("p");
+    illustrationError.className = "illustration-error";
+    illustrationError.setAttribute("role", "alert");
+    illustrationError.hidden = true;
     illustrationButton.addEventListener("click", async () => {
       illustrationButton.disabled = true;
       illustrationButton.textContent = "Generazione";
+      illustrationError.hidden = true;
+      illustrationError.textContent = "";
       try {
         const response = await fetch("/api/illustrations", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ question, answer: content }),
         });
+        if (!response.headers.get("content-type")?.includes("application/json")) {
+          throw new Error(`Generazione non disponibile (HTTP ${response.status}). Riprova piu tardi.`);
+        }
         const data = await response.json();
-        if (!response.ok) throw new Error(data.detail || "Errore durante la generazione.");
+        if (!response.ok) {
+          throw new Error(typeof data.detail === "string"
+            ? data.detail
+            : "Domanda o risposta non valida per la generazione. Prova con un testo piu breve.");
+        }
+        if (typeof data.image_url !== "string" || !data.image_url) {
+          throw new Error("Il server non ha restituito l'indirizzo dell'immagine.");
+        }
         const image = document.createElement("img");
         image.className = "generated-image";
         image.src = data.image_url;
@@ -131,11 +147,13 @@ function addMessage(content, role, sources = [], question = "") {
         message.append(image);
         actions.remove();
       } catch (error) {
+        illustrationError.textContent = error.message;
+        illustrationError.hidden = false;
         illustrationButton.disabled = false;
         illustrationButton.textContent = "Riprova immagine";
       }
     });
-    actions.append(illustrationButton);
+    actions.append(illustrationButton, illustrationError);
     message.append(actions);
   }
 

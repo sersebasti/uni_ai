@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import json
+import logging
 import os
 import re
 import threading
@@ -14,7 +16,7 @@ from chromadb.errors import NotFoundError
 from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from openai import OpenAI, OpenAIError
+from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI, OpenAIError
 from pydantic import BaseModel, Field
 
 from src.rag import COLLECTION_NAME, chroma_client, create_embeddings
@@ -27,6 +29,7 @@ MAX_SOURCES = 6
 MAX_OVERVIEW_SOURCES = 20
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -282,20 +285,69 @@ def generate_illustration(request: IllustrationRequest) -> dict[str, str]:
         "or long passages of text. Only depict concepts supported by this answer.\n\n"
         f"Student question: {request.question}\n\nAnswer to illustrate: {request.answer}"
     )
+    model = os.environ.get("OPENAI_IMAGE_MODEL", "gpt-image-1")
     try:
         result = OpenAI(api_key=api_key).images.generate(
-            model=os.environ.get("OPENAI_IMAGE_MODEL", "gpt-image-1"),
+            model=model,
             prompt=prompt,
             size="1024x1024",
             quality="medium",
         )
+    except APITimeoutError as error:
+        logger.warning("Timeout durante la generazione immagine: model=%s", model)
+        raise HTTPException(
+            status_code=504, detail="OpenAI ha impiegato troppo tempo a generare l'immagine. Riprova."
+        ) from error
+    except APIConnectionError as error:
+        logger.warning("Connessione OpenAI non disponibile per le immagini: model=%s", model)
+        raise HTTPException(
+            status_code=502, detail="Impossibile contattare OpenAI per generare l'immagine."
+        ) from error
+    except APIStatusError as error:
+        logger.warning(
+            "Generazione immagine rifiutata: model=%s status=%s code=%s request_id=%s",
+            model, error.status_code, error.code, error.request_id,
+        )
+        if error.code in {"insufficient_quota", "billing_hard_limit_reached", "billing_not_active"}:
+            detail = "Credito o limite di spesa OpenAI esaurito. Controlla la fatturazione API."
+        elif error.status_code == 401:
+            detail = "La chiave API OpenAI non e valida. Controlla OPENAI_API_KEY."
+        elif error.status_code == 403:
+            detail = (
+                "OpenAI non autorizza la generazione immagini. Controlla i permessi del "
+                "progetto e l'eventuale verifica dell'organizzazione richiesta per il modello."
+            )
+        elif error.status_code == 404:
+            detail = "Modello immagini non disponibile. Controlla OPENAI_IMAGE_MODEL e i permessi."
+        elif error.status_code == 429:
+            detail = "Limite di richieste OpenAI raggiunto. Attendi prima di riprovare."
+        else:
+            detail = (
+                f"OpenAI ha rifiutato la generazione (HTTP {error.status_code}). "
+                "Controlla modello, parametri e stato del servizio."
+            )
+        raise HTTPException(status_code=502, detail=detail) from error
     except OpenAIError as error:
+        logger.warning("Errore OpenAI nella generazione immagine: %s", type(error).__name__)
         raise HTTPException(status_code=502, detail="OpenAI non ha generato l'immagine.") from error
 
-    image_base64 = result.data[0].b64_json
+    image_base64 = result.data[0].b64_json if result.data else None
     if not image_base64:
+        logger.error("Risposta immagini OpenAI priva di dati: model=%s", model)
         raise HTTPException(status_code=502, detail="OpenAI non ha restituito un'immagine.")
 
+    try:
+        image_bytes = base64.b64decode(image_base64, validate=True)
+    except binascii.Error as error:
+        logger.error("Dati immagine OpenAI non validi: model=%s", model)
+        raise HTTPException(status_code=502, detail="OpenAI ha restituito un'immagine non valida.") from error
+
     filename = f"illustration-{uuid.uuid4().hex}.png"
-    (MEDIA_DIR / filename).write_bytes(base64.b64decode(image_base64))
+    try:
+        (MEDIA_DIR / filename).write_bytes(image_bytes)
+    except OSError as error:
+        logger.exception("Impossibile salvare l'immagine generata")
+        raise HTTPException(
+            status_code=500, detail="Impossibile salvare l'immagine. Controlla lo spazio e i permessi di data/generated."
+        ) from error
     return {"image_url": f"/media/{filename}"}
